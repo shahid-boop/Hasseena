@@ -1,0 +1,231 @@
+package com.hasseena.assistant
+
+import com.hasseena.assistant.ai.AiBrain
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.view.Gravity
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import java.util.Locale
+
+class MainActivity : Activity() {
+
+    private lateinit var statusText: TextView
+    private lateinit var listenButton: Button
+    private lateinit var speechRecognizer: SpeechRecognizer
+    private lateinit var textToSpeech: TextToSpeech
+    private val aiBrain = AiBrain()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        buildUI()
+        setupTTS()
+        setupSpeechRecognizer()
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                100
+            )
+        }
+    }
+
+    private fun buildUI() {
+        val layout = LinearLayout(this)
+        layout.orientation = LinearLayout.VERTICAL
+        layout.gravity = Gravity.CENTER
+        layout.setPadding(40, 40, 40, 40)
+
+        statusText = TextView(this)
+        statusText.text = "Hasseena ready"
+        statusText.textSize = 22f
+        statusText.gravity = Gravity.CENTER
+
+        listenButton = Button(this)
+        listenButton.text = "Listen"
+
+        layout.addView(statusText)
+        layout.addView(listenButton)
+
+        setContentView(layout)
+
+        listenButton.setOnClickListener {
+            startListening()
+        }
+    }
+
+    private fun setupTTS() {
+        textToSpeech = TextToSpeech(this) { result ->
+            if (result == TextToSpeech.SUCCESS) {
+                val locale = Locale.US
+
+                textToSpeech.setLanguage(locale)
+
+                // Natural young-adult female assistant style
+                textToSpeech.setPitch(1.06f)
+                textToSpeech.setSpeechRate(0.90f)
+
+                val voices = textToSpeech.voices ?: emptyList()
+
+                val femaleVoice = voices
+                    .filter {
+                        it.locale.language == locale.language &&
+                        !it.isNetworkConnectionRequired
+                    }
+                    .firstOrNull {
+                        val name = it.name.lowercase()
+                        name.contains("female") ||
+                        name.contains("woman") ||
+                        name.contains("samantha") ||
+                        name.contains("zira")
+                    }
+
+                if (femaleVoice != null) {
+                    textToSpeech.voice = femaleVoice
+                }
+            }
+        }
+    }
+
+    private fun setupSpeechRecognizer() {
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+
+        speechRecognizer.setRecognitionListener(object : RecognitionListener {
+
+            override fun onReadyForSpeech(params: Bundle?) {
+                statusText.text = "Listening..."
+            }
+
+            override fun onBeginningOfSpeech() {
+                statusText.text = "Bolain..."
+            }
+
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                )
+
+                val spokenText = matches?.firstOrNull().orEmpty()
+
+                if (spokenText.isNotBlank()) {
+                    val result = aiBrain.process(spokenText)
+                    statusText.text = spokenText + "\nHasseena: " + result.reply
+                    if (result.actions.isNotEmpty()) {
+                        handleIntent(result.actions.first().type, spokenText)
+                    } else if (result.shouldSpeak) {
+                        speak(result.reply)
+                    }
+                } else {
+                    statusText.text = "Samajh nahi aaya"
+                }
+            }
+
+            override fun onError(error: Int) {
+                statusText.text = "Voice error: " + error
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+    }
+
+    private fun startListening() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                100
+            )
+            return
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        intent.putExtra(
+            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+        )
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+
+        speechRecognizer.startListening(intent)
+    }
+
+    private fun handleIntent(type: String, spokenText: String) {
+        when (type) {
+            "OPEN_APP" -> {
+                val packageName = if (spokenText.lowercase().contains("youtube"))
+                    "com.google.android.youtube"
+                else
+                    ""
+
+                val launchIntent = if (packageName.isNotBlank())
+                    packageManager.getLaunchIntentForPackage(packageName)
+                else null
+
+                if (launchIntent != null) {
+                    startActivity(launchIntent)
+                    speak("App khol rahi hoon.")
+                } else {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")))
+                    speak("YouTube browser mein khol rahi hoon.")
+                }
+            }
+            "YOUTUBE" -> {
+                val launchIntent = packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+                if (launchIntent != null) {
+                    startActivity(launchIntent)
+                    speak("YouTube khol rahi hoon.")
+                } else {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")))
+                    speak("YouTube browser mein khol rahi hoon.")
+                }
+            }
+            else -> speak(responseFor(type))
+        }
+    }
+
+    private fun responseFor(type: String): String {
+        return when (type) {
+            "GREETING" -> "Assalam o Alaikum, main Hasseena hoon."
+            "TIME" -> "Main time feature ke liye ready hoon."
+            "YOUTUBE" -> "YouTube command samajh gayi."
+            "WHATSAPP" -> "WhatsApp command samajh gayi."
+            "CAMERA" -> "Camera command samajh gayi."
+            "WEATHER" -> "Weather command samajh gayi."
+            "WEB_SEARCH" -> "Search command samajh gayi."
+            "GENERAL" -> "Main aapki baat samajhne ki koshish kar rahi hoon."
+            else -> "Ji."
+        }
+    }
+
+    private fun speak(text: String) {
+        textToSpeech.speak(
+            text,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "HASSEENA"
+        )
+    }
+
+    override fun onDestroy() {
+        speechRecognizer.destroy()
+        textToSpeech.stop()
+        textToSpeech.shutdown()
+        super.onDestroy()
+    }
+}
